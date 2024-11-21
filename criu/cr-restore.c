@@ -2051,6 +2051,17 @@ static int restore_root_task(struct pstree_item *init)
 	if (ret < 0)
 		goto out;
 
+	pr_info("Run restore asynchronous hook from criu master for external devices\n");
+	ret = run_plugins(RESTORE_ASYNCHRONOUS);
+	/*
+	 * This may not really be an error. Only certain plugin hooks
+	 * (if available) will return success such as amdgpu_plugin.
+	 * Most of the times, it'll be -ENOTSUP and in few cases, it
+	 * might actually be a true error code but that won't be 
+	 * -ENOTSUP.
+	 */
+	if (ret < 0 && ret != -ENOTSUP)
+		goto out_kill;
 	restore_origin_ns_hook();
 
 	if (rsti(init)->clone_flags & CLONE_PARENT) {
