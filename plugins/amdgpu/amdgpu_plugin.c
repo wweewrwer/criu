@@ -1959,6 +1959,8 @@ FILE *get_bo_contents_fp(int id, int gpu_id, size_t tot_size)
 
 int amdgpu_plugin_restore_asynchronous(void)
 {
+	if (plugin_disabled)
+		return -ENOTSUP;
 	if (!opts.parallel_mode) {
 		return 0;
 	}
