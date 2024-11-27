@@ -1498,7 +1498,9 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 
 	if (opts.parallel_mode) {
 		pr_info("Begin to send parallel restore cmd\n");
-		init_parallel_restore_cmd(e->num_of_bos, id);
+		ret = init_parallel_restore_cmd(e->num_of_bos, id);
+		if (ret)
+			goto exit_parallel;
 		for (int i = 0; i < e->num_of_gpus + e->num_of_cpus; i++) {
 			uint32_t target_gpu_id;
 			struct tp_node *dev;
@@ -1976,8 +1978,9 @@ int amdgpu_plugin_restore_asynchronous(void)
 	if (ret)
 		return ret;
 
-	int *vis = (int *)malloc(restore_cmd.cmd_head.entry_num * sizeof(int));
-	memset(vis, 0, restore_cmd.cmd_head.entry_num * sizeof(int));
+	int *vis = xzalloc(restore_cmd.cmd_head.entry_num * sizeof(int));
+	if (vis == 0)
+		return -ENOMEM;
 	//Enumerate gpu_id
 	for (int i = 0; i < restore_cmd.cmd_head.entry_num; i++) {
 		if (vis[i] != 0)
@@ -2033,7 +2036,7 @@ err_sdma:
 			goto err;
 	}
 err:
-	free(vis);
+	xfree(vis);
 	free_parallel_restore_cmd();
 	return ret;
 }

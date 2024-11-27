@@ -115,29 +115,38 @@ err:
 	return ret;
 }
 
-void init_parallel_restore_cmd(int num, int id)
+int init_parallel_restore_cmd(int num, int id)
 {
 	restore_cmd.cmd_head.id = id;
 	restore_cmd.cmd_head.fd_write_num = 0;
 	restore_cmd.cmd_head.entry_num = 0;
 
-	restore_cmd.fds_write = (int *)malloc(num * sizeof(int));
-	restore_cmd.entries = (parallel_restore_entry *)malloc(num * sizeof(parallel_restore_entry));
-
-	memset(restore_cmd.fds_write, 0, num * sizeof(int));
-	memset(restore_cmd.entries, 0, num * sizeof(parallel_restore_entry));
+	restore_cmd.fds_write = xzalloc(num * sizeof(int));
+	if (!restore_cmd.fds_write)
+		return -ENOMEM;
+	restore_cmd.entries = xzalloc(num * sizeof(parallel_restore_entry));
+	if (!restore_cmd.entries)
+		return -ENOMEM;
+	return 0;
 }
 
 void free_parallel_restore_cmd()
 {
-	free(restore_cmd.fds_write);
-	free(restore_cmd.entries);
+	if (restore_cmd.fds_write)
+		xfree(restore_cmd.fds_write);
+	if (restore_cmd.entries)
+		xfree(restore_cmd.entries);
 }
 
-void init_parallel_restore_cmd_by_head()
+int init_parallel_restore_cmd_by_head()
 {
-	restore_cmd.fds_write = (int *)malloc(restore_cmd.cmd_head.fd_write_num * sizeof(int));
-	restore_cmd.entries = (parallel_restore_entry *)malloc(restore_cmd.cmd_head.entry_num * sizeof(parallel_restore_entry));
+	restore_cmd.fds_write = xzalloc(restore_cmd.cmd_head.fd_write_num * sizeof(int));
+	if (!restore_cmd.fds_write)
+		return -ENOMEM;
+	restore_cmd.entries = xzalloc(restore_cmd.cmd_head.entry_num * sizeof(parallel_restore_entry));
+	if (!restore_cmd.entries)
+		return -ENOMEM;
+	return 0;
 }
 
 int recv_metadata(int client_fd)
@@ -180,7 +189,10 @@ int recv_parallel_restore_cmd()
 	if (ret) {
 		goto err;
 	}
-	init_parallel_restore_cmd_by_head();
+	ret = init_parallel_restore_cmd_by_head();
+	if (ret) {
+		goto err;
+	}
 
 	pr_info("Parallel restore: begin to recv entries\n");
 	ret = recv_cmds(sock_fd);

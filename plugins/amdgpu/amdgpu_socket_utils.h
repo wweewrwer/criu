@@ -32,7 +32,7 @@ typedef struct {
 
 extern parallel_restore_cmd restore_cmd;
 
-void init_parallel_restore_cmd(int num, int id);
+int init_parallel_restore_cmd(int num, int id);
 
 void free_parallel_restore_cmd();
 
