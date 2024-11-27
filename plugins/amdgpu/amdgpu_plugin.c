@@ -352,10 +352,8 @@ int amdgpu_plugin_init(int stage)
 	maps_init(&restore_maps);
 
 	if (stage == CR_PLUGIN_STAGE__RESTORE) {
-		if (opts.parallel_mode == 1) {
-			if (install_parallel_sock() < 0) {
-				return -1;
-			}
+		if (install_parallel_sock() < 0) {
+			return -1;
 		}
 		/* Default Values */
 		kfd_fw_version_check = true;
@@ -1445,15 +1443,8 @@ static int restore_bos(struct kfd_ioctl_criu_args *args, CriuKfd *e)
 
 static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKfd *e)
 {
-	struct thread_data *thread_datas;
-	int thread_i, ret = 0;
+	int ret = 0;
 	int offset = 0;
-
-	thread_datas = xzalloc(sizeof(*thread_datas) * e->num_of_gpus);
-	if (!thread_datas) {
-		ret = -ENOMEM;
-		goto exit;
-	}
 
 	for (int i = 0; i < e->num_of_bos; i++) {
 		struct kfd_criu_bo_bucket *bo_bucket = &bo_buckets[i];
@@ -1496,95 +1487,40 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 		}
 	}
 
-	if (opts.parallel_mode) {
-		pr_info("Begin to send parallel restore cmd\n");
-		ret = init_parallel_restore_cmd(e->num_of_bos, id);
-		if (ret)
+	pr_info("Begin to send parallel restore cmd\n");
+	ret = init_parallel_restore_cmd(e->num_of_bos, id);
+	if (ret)
+		goto exit_parallel;
+
+	for (int i = 0; i < e->num_of_gpus + e->num_of_cpus; i++) {
+		uint32_t target_gpu_id;
+		struct tp_node *dev;
+		offset = 8;
+		target_gpu_id = maps_get_dest_gpu(&restore_maps, e->device_entries[i]->gpu_id);
+		dev = sys_get_node_by_gpu_id(&dest_topology, target_gpu_id);
+		if (!dev) {
+			pr_err("Failed to find node with gpu_id:0x%04x\n", target_gpu_id);
+			ret = -ENODEV;
 			goto exit_parallel;
-		for (int i = 0; i < e->num_of_gpus + e->num_of_cpus; i++) {
-			uint32_t target_gpu_id;
-			struct tp_node *dev;
-			offset = 8;
-			target_gpu_id = maps_get_dest_gpu(&restore_maps, e->device_entries[i]->gpu_id);
-			dev = sys_get_node_by_gpu_id(&dest_topology, target_gpu_id);
-			if (!dev) {
-				pr_err("Failed to find node with gpu_id:0x%04x\n", target_gpu_id);
-				ret = -ENODEV;
-				goto exit_parallel;
-			}
-			for (int j = 0; j < e->num_of_bos; j++) {
-				if (bo_buckets[j].gpu_id != e->device_entries[i]->gpu_id)
-					continue;
-				if (bo_buckets[j].alloc_flags & (KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_GTT)) {
-					parallel_restore_bo_add(bo_buckets[j].dmabuf_fd, bo_buckets[j].gpu_id, bo_buckets[j].size, offset, dev->drm_render_minor);
-					offset += bo_buckets[j].size;
-				}
-			}
 		}
-		ret = send_parallel_restore_cmd();
-exit_parallel:
-		free_parallel_restore_cmd();
-	} else {
-		thread_i = 0;
-		for (int i = 0; i < e->num_of_gpus + e->num_of_cpus; i++) {
-			struct tp_node *dev;
-			int ret_thread = 0;
-			uint32_t target_gpu_id;
 
-			if (!e->device_entries[i]->gpu_id)
+		for (int j = 0; j < e->num_of_bos; j++) {
+			if (bo_buckets[j].gpu_id != e->device_entries[i]->gpu_id)
 				continue;
-
-			/* e->device_entries[i]->gpu_id is user_gpu_id, target_gpu_id is actual_gpu_id */
-			target_gpu_id = maps_get_dest_gpu(&restore_maps, e->device_entries[i]->gpu_id);
-
-			/* We need the fd for actual_gpu_id */
-			dev = sys_get_node_by_gpu_id(&dest_topology, target_gpu_id);
-			if (!dev) {
-				pr_err("Failed to find node with gpu_id:0x%04x\n", target_gpu_id);
-				ret = -ENODEV;
-				goto exit;
-			}
-
-			thread_datas[thread_i].id = id;
-			thread_datas[thread_i].gpu_id = e->device_entries[i]->gpu_id;
-			thread_datas[thread_i].bo_buckets = bo_buckets;
-			thread_datas[thread_i].bo_entries = e->bo_entries;
-			thread_datas[thread_i].pid = e->pid;
-			thread_datas[thread_i].num_of_bos = e->num_of_bos;
-
-			thread_datas[thread_i].drm_fd = node_get_drm_render_device(dev);
-			if (thread_datas[thread_i].drm_fd < 0) {
-				ret = -thread_datas[thread_i].drm_fd;
-				goto exit;
-			}
-
-			ret_thread = pthread_create(&thread_datas[thread_i].thread, NULL, restore_bo_contents,
-						    (void *)&thread_datas[thread_i]);
-			if (ret_thread) {
-				pr_err("Failed to create thread[%i] ret:%d\n", thread_i, ret_thread);
-				ret = -ret_thread;
-				goto exit;
-			}
-			thread_i++;
-		}
-
-		for (int i = 0; i < e->num_of_gpus; i++) {
-			pthread_join(thread_datas[i].thread, NULL);
-			pr_info("Thread[0x%x] finished ret:%d\n", thread_datas[i].gpu_id, thread_datas[i].ret);
-
-			if (thread_datas[i].ret) {
-				ret = thread_datas[i].ret;
-				goto exit;
+			if (bo_buckets[j].alloc_flags & (KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_GTT)) {
+				parallel_restore_bo_add(bo_buckets[j].dmabuf_fd, bo_buckets[j].gpu_id, bo_buckets[j].size, offset, dev->drm_render_minor);
+				offset += bo_buckets[j].size;
 			}
 		}
 	}
+	ret = send_parallel_restore_cmd();
+exit_parallel:
+	free_parallel_restore_cmd();
 exit:
 	for (int i = 0; i < e->num_of_bos; i++) {
 		if (bo_buckets[i].dmabuf_fd != KFD_INVALID_FD)
 			close(bo_buckets[i].dmabuf_fd);
 	}
-
-	xfree(thread_datas);
 	return ret;
 }
 
@@ -1963,9 +1899,7 @@ int amdgpu_plugin_restore_asynchronous(void)
 {
 	if (plugin_disabled)
 		return -ENOTSUP;
-	if (!opts.parallel_mode) {
-		return 0;
-	}
+
   amdgpu_device_handle h_dev;
 	uint64_t max_copy_size;
 	size_t total_bo_size = 0, max_bo_size = 0, buffer_size = 0;

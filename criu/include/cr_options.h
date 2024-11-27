@@ -237,11 +237,6 @@ struct cr_options {
 	 * explicitly request it as it comes with many limitations.
 	 */
 	int unprivileged;
-	/*
-	 * If parallel_mode is not 0, parallel restore of AMDGPU 
-	 * buffer object contents with other restore operations is enabled.
-	 */
-	int parallel_mode;
 };
 
 extern struct cr_options opts;
