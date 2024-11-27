@@ -2124,8 +2124,8 @@ static int restore_root_task(struct pstree_item *init)
 	__restore_switch_stage(CR_STATE_FORKING);
 
 skip_ns_bouncing:
-	pr_info("Run restore asynchronous hook from criu master for external devices\n");
-	ret = run_plugins(RESTORE_ASYNCHRONOUS);
+	pr_info("Run restore device parallel hook from criu master for external devices\n");
+	ret = run_plugins(RESTORE_DEVICE_PARALLEL);
 	if (ret < 0 && ret != -ENOTSUP)
 		goto out_kill;
 

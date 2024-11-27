@@ -1895,7 +1895,7 @@ FILE *get_bo_contents_fp(int id, int gpu_id, size_t tot_size)
 	return bo_contents_fp;
 }
 
-int amdgpu_plugin_restore_asynchronous(void)
+int amdgpu_plugin_restore_device_parallel(void)
 {
 	if (plugin_disabled)
 		return -ENOTSUP;
@@ -1974,4 +1974,4 @@ err:
 	free_parallel_restore_cmd();
 	return ret;
 }
-CR_PLUGIN_REGISTER_HOOK(CR_PLUGIN_HOOK__RESTORE_ASYNCHRONOUS, amdgpu_plugin_restore_asynchronous)
+CR_PLUGIN_REGISTER_HOOK(CR_PLUGIN_HOOK__RESTORE_DEVICE_PARALLEL, amdgpu_plugin_restore_device_parallel)
