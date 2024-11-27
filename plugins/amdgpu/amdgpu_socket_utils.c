@@ -59,7 +59,7 @@ void parallel_restore_bo_add(int dmabuf_fd, int gpu_id, uint64_t size, uint64_t 
 	restore_cmd.cmd_head.fd_write_num += 1;
 }
 
-int send_metadata(int sock_fd)
+static int send_metadata(int sock_fd)
 {
 	if (sendto(sock_fd, &restore_cmd.cmd_head, sizeof(parallel_restore_cmd_head), 0, (struct sockaddr *)&sock_addr, addr_len) < 0) {
 		pr_perror("write");
@@ -68,7 +68,7 @@ int send_metadata(int sock_fd)
 	return 0;
 }
 
-int send_cmds(int sock_fd)
+static int send_cmds(int sock_fd)
 {
 	if (sendto(sock_fd, restore_cmd.entries, restore_cmd.cmd_head.entry_num * sizeof(parallel_restore_entry), 0, (struct sockaddr *)&sock_addr, addr_len) < 0) {
 		pr_perror("write");
@@ -77,7 +77,7 @@ int send_cmds(int sock_fd)
 	return 0;
 }
 
-int send_dmabuf_fds(int sock_fd)
+static int send_dmabuf_fds(int sock_fd)
 {
 	if (send_fds(sock_fd, &sock_addr, addr_len, restore_cmd.fds_write, restore_cmd.cmd_head.fd_write_num, 0, 0) < 0) {
 		pr_perror("Send dmabuf fail");
@@ -149,7 +149,7 @@ int init_parallel_restore_cmd_by_head()
 	return 0;
 }
 
-int recv_metadata(int client_fd)
+static int recv_metadata(int client_fd)
 {
 	if (recvfrom(client_fd, &restore_cmd.cmd_head, sizeof(parallel_restore_cmd_head), 0, NULL, NULL) < 0) {
 		pr_perror("read");
@@ -158,7 +158,7 @@ int recv_metadata(int client_fd)
 	return 0;
 }
 
-int recv_cmds(int client_fd)
+static int recv_cmds(int client_fd)
 {
 	if (recvfrom(client_fd, restore_cmd.entries, restore_cmd.cmd_head.entry_num * sizeof(parallel_restore_entry), 0, NULL, NULL) < 0) {
 		pr_perror("read");
@@ -167,7 +167,7 @@ int recv_cmds(int client_fd)
 	return 0;
 }
 
-int recv_dmabuf_fds(int client_fd)
+static int recv_dmabuf_fds(int client_fd)
 {
 	if (recv_fds(client_fd, restore_cmd.fds_write, restore_cmd.cmd_head.fd_write_num, 0, 0) < 0) {
 		pr_perror("Recv dmabuf fail");
