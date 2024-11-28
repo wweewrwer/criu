@@ -1508,7 +1508,8 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 			if (bo_buckets[j].gpu_id != e->device_entries[i]->gpu_id)
 				continue;
 			if (bo_buckets[j].alloc_flags & (KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_GTT)) {
-				parallel_restore_bo_add(bo_buckets[j].dmabuf_fd, bo_buckets[j].gpu_id, bo_buckets[j].size, offset, dev->drm_render_minor);
+				parallel_restore_bo_add(bo_buckets[j].dmabuf_fd, bo_buckets[j].gpu_id, bo_buckets[j].size,
+							offset, dev->drm_render_minor);
 				offset += bo_buckets[j].size;
 			}
 		}
@@ -1839,7 +1840,8 @@ CR_PLUGIN_REGISTER_HOOK(CR_PLUGIN_HOOK__RESUME_DEVICES_LATE, amdgpu_plugin_resum
 int sdma_copy_bo_helper(uint64_t size, int fd, FILE *storage_fp, void *buffer, size_t buffer_size,
 			amdgpu_device_handle h_dev, uint64_t max_copy_size, enum sdma_op_type type)
 {
-	return sdma_copy_bo((struct kfd_criu_bo_bucket){ 0, size, 0, 0, 0, 0, fd, 0 }, storage_fp, buffer, buffer_size, h_dev, max_copy_size, SDMA_OP_VRAM_WRITE);
+	return sdma_copy_bo((struct kfd_criu_bo_bucket){ 0, size, 0, 0, 0, 0, fd, 0 }, storage_fp, buffer,
+			    buffer_size, h_dev, max_copy_size, SDMA_OP_VRAM_WRITE);
 }
 
 int init_dev(int dev_minor, amdgpu_device_handle *h_dev, uint64_t *max_copy_size)
@@ -1904,6 +1906,7 @@ int amdgpu_plugin_restore_device_parallel(void)
 	uint64_t max_copy_size;
 	size_t total_bo_size = 0, max_bo_size = 0, buffer_size = 0;
 	FILE *bo_contents_fp = NULL;
+	parallel_restore_entry *entry;
 	void *buffer = NULL;
 	int ret = 0;
 
@@ -1949,10 +1952,12 @@ int amdgpu_plugin_restore_device_parallel(void)
 
 		//Enumerate restore_cmd for the same gpu_id
 		for (int j = i; j < restore_cmd.cmd_head.entry_num; j++) {
-			if (restore_cmd.entries[i].gpu_id == restore_cmd.entries[j].gpu_id) {
+			entry = &restore_cmd.entries[j];
+			if (restore_cmd.entries[i].gpu_id == entry->gpu_id) {
 				vis[j] = 1;
-				fseek(bo_contents_fp, restore_cmd.entries[j].read_offset, SEEK_SET);
-				ret = sdma_copy_bo_helper(restore_cmd.entries[j].size, restore_cmd.fds_write[restore_cmd.entries[j].write_id], bo_contents_fp, buffer, buffer_size, h_dev, max_copy_size, SDMA_OP_VRAM_WRITE);
+				fseek(bo_contents_fp, entry->read_offset, SEEK_SET);
+				ret = sdma_copy_bo_helper(entry->size, restore_cmd.fds_write[entry->write_id],
+							  bo_contents_fp, buffer, buffer_size, h_dev, max_copy_size, SDMA_OP_VRAM_WRITE);
 				if (ret) {
 					pr_err("Failed to fill the BO using sDMA: bo_buckets[%d]\n", i);
 					goto err_sdma;
