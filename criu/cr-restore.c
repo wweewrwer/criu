@@ -2361,9 +2361,6 @@ int cr_restore_tasks(void)
 	if (check_img_inventory(/* restore = */ true) < 0)
 		goto err;
 
-	if (cr_plugin_init(CR_PLUGIN_STAGE__RESTORE))
-		return -1;
-
 	if (init_stats(RESTORE_STATS))
 		goto err;
 
@@ -2394,6 +2391,9 @@ int cr_restore_tasks(void)
 
 	if (fdstore_init())
 		goto err;
+
+	if (cr_plugin_init(CR_PLUGIN_STAGE__RESTORE))
+		return -1;
 
 	if (inherit_fd_move_to_fdstore())
 		goto err;
