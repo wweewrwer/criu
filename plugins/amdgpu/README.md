@@ -3,7 +3,8 @@ Supporting ROCm with CRIU
 
 _Felix Kuehling <Felix.Kuehling@amd.com>_<br>
 _Rajneesh Bardwaj <Rajneesh.Bhardwaj@amd.com>_<br>
-_David Yat Sin <David.YatSin@amd.com>_
+_David Yat Sin <David.YatSin@amd.com>_<br>
+_Yanning Yang <yangyanning@sjtu.edu.cn>_
 
 # Introduction
 
@@ -223,6 +224,27 @@ to resume execution on the GPUs.
 
 *This new plugin is enabled by the new hook `__RESUME_DEVICES_LATE` in our RFC
 patch series.*
+
+## Restoring BO content in parallel
+
+Restoring the BO content is an important part in the restore of GPU state and
+usually takes a significant amount of time. A possible location for this
+procedure is the `cr_plugin_restore_file` plugin. However, restoring in this
+plugin blocks the target process from performing other restore operations, which
+hinders further optimization of the restore process.
+
+Therefore, a new plugin that runs in the master restore process is introduced,
+and it interacts with the `cr_plugin_restore_file` plugin to complete the
+restore of BO content. Specifically, the target process only needs to send the
+relevant BOs to the master restore process, while this new plugin handles all
+the restore of buffer objects. Through this method, during the restore of the BO
+content, the target process can perform other restore operations, thus
+accelerating the restore procedure. It is an implementation of gCROP from the
+ACM SoCC'24 paper: [On-demand and Parallel Checkpoint/Restore for GPU
+Applications](https://dl.acm.org/doi/10.1145/3698038.3698510).
+
+*This new plugin is enabled by the new hook `__POST_FORKING` in our patch
+series.*
 
 ## Other CRIU changes
 
