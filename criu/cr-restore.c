@@ -188,7 +188,7 @@ static int __restore_wait_inprogress_tasks(int participants)
 	return 0;
 }
 
-static int restore_wait_inprogress_tasks(void)
+int restore_wait_inprogress_tasks(void)
 {
 	return __restore_wait_inprogress_tasks(0);
 }
