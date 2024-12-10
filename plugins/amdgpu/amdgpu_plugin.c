@@ -508,6 +508,7 @@ void free_and_unmap(uint64_t size, amdgpu_bo_handle h_bo, amdgpu_va_handle h_va,
 	amdgpu_bo_free(h_bo);
 }
 
+pthread_mutex_t lock;
 static int sdma_copy_bo(struct kfd_criu_bo_bucket bo_bucket, FILE *storage_fp,
 						void *buffer, size_t buffer_size, amdgpu_device_handle h_dev,
 						uint64_t max_copy_size, enum sdma_op_type type)
@@ -535,7 +536,7 @@ static int sdma_copy_bo(struct kfd_criu_bo_bucket bo_bucket, FILE *storage_fp,
 	dst_bo_size = (type == SDMA_OP_VRAM_READ) ? buffer_bo_size : size;
 
 	plugin_log_msg("Enter %s\n", __func__);
-
+  //pthread_mutex_lock(&lock);
 	/* prepare src buffer */
 	switch (type) {
 	case SDMA_OP_VRAM_WRITE:
@@ -638,13 +639,13 @@ static int sdma_copy_bo(struct kfd_criu_bo_bucket bo_bucket, FILE *storage_fp,
 		memset(&ib_info, 0, sizeof(ib_info));
 		memset(ib, 0, packets_per_buffer * 28);
 
-		if (type == SDMA_OP_VRAM_WRITE) {
-			err = read_fp(storage_fp, buffer, min(bytes_remain, buffer_bo_size));
-			if (err) {
-				pr_perror("failed to read from storage");
-				goto err_bo_list;
-			}
-		}
+		//if (type == SDMA_OP_VRAM_WRITE) {
+		//	err = read_fp(storage_fp, buffer, min(bytes_remain, buffer_bo_size));
+		//	if (err) {
+		//		pr_perror("failed to read from storage");
+		//		goto err_bo_list;
+		//	}
+		//}
 
 		buffer_space_remain = buffer_bo_size;
 		if (type == SDMA_OP_VRAM_WRITE)
@@ -726,6 +727,7 @@ err_cs_submit_ib:
 		if (err)
 			break;
 	}
+  //pthread_mutex_unlock(&lock);
 err_ctx:
 	amdgpu_bo_list_destroy(h_bo_list);
 err_bo_list:
@@ -755,6 +757,7 @@ err_src_va:
 	if (err)
 		pr_perror("src bo free failed");
 	plugin_log_msg("Leaving sdma_copy_bo, err = %d\n", err);
+  
 	return err;
 }
 
@@ -1446,6 +1449,7 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 {
 	int ret = 0;
 	int offset = 0;
+  parallel_restore_cmd restore_cmd;
 
 	for (int i = 0; i < e->num_of_bos; i++) {
 		struct kfd_criu_bo_bucket *bo_bucket = &bo_buckets[i];
@@ -1489,7 +1493,7 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 	}
 
 	pr_info("Begin to send parallel restore cmd\n");
-	ret = init_parallel_restore_cmd(e->num_of_bos, id);
+	ret = init_parallel_restore_cmd(e->num_of_bos, id, &restore_cmd);
 	if (ret)
 		goto exit_parallel;
 
@@ -1510,14 +1514,14 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 				continue;
 			if (bo_buckets[j].alloc_flags & (KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_GTT)) {
 				parallel_restore_bo_add(bo_buckets[j].dmabuf_fd, bo_buckets[j].gpu_id, bo_buckets[j].size,
-							offset, dev->drm_render_minor);
+							offset, dev->drm_render_minor, &restore_cmd);
 				offset += bo_buckets[j].size;
 			}
 		}
 	}
-	ret = send_parallel_restore_cmd();
+	ret = send_parallel_restore_cmd(&restore_cmd);
 exit_parallel:
-	free_parallel_restore_cmd();
+	free_parallel_restore_cmd(&restore_cmd);
 exit:
 	for (int i = 0; i < e->num_of_bos; i++) {
 		if (bo_buckets[i].dmabuf_fd != KFD_INVALID_FD)
@@ -1898,93 +1902,166 @@ FILE *get_bo_contents_fp(int id, int gpu_id, size_t tot_size)
 	return bo_contents_fp;
 }
 
-void *restore_device_parallel_worker(void *arg)
+struct readhelper_data{
+  FILE *bo_contents_fp;
+  void *buffer;
+  size_t size;
+  int isRead;
+  uint64_t offset;
+  int n;
+};
+void *readhelper(void *arg){
+  struct readhelper_data* mydata = (struct readhelper_data *)arg;
+  int n = mydata->n;
+  //timing_record(0);
+  for(int i =0 ;i <n;i++){
+    int fd = fileno(mydata[i].bo_contents_fp);
+    int newFd = dup(fd);
+    FILE* newFile = fdopen(newFd, "r");
+    fseek(newFile, mydata[i].offset, SEEK_SET);
+    read_fp(newFile,mydata[i].buffer+mydata[i].offset-8,mydata[i].size);
+    mydata[i].isRead=1;
+  }
+  //timing_record(1);
+  return NULL;
+}
+
+struct parallel_thread_data {
+  parallel_restore_cmd restore_cmd;
+  int ret;
+};
+
+void *restore_worker(void *arg){
+  pr_msg("Restore begin\n");
+  amdgpu_device_handle h_dev;
+	uint64_t max_copy_size;
+	size_t total_bo_size = 0, max_bo_size = 0, buffer_size = 0;
+	FILE *bo_contents_fp = NULL;
+	parallel_restore_entry *entry;
+	void *buffer = NULL;
+	int *vis = NULL;
+  struct parallel_thread_data* here_data = (struct parallel_thread_data*)arg;
+	int *ret = &here_data->ret;
+  parallel_restore_cmd restore_cmd = here_data->restore_cmd;
+  struct readhelper_data*  mydata;
+
+  pr_msg("restore cmd %d\n",restore_cmd.cmd_head.entry_num);
+  vis = xzalloc(restore_cmd.cmd_head.entry_num * sizeof(int));
+	if (vis == 0) {
+		*ret = -ENOMEM;
+		return NULL;
+	}
+  mydata = xzalloc(restore_cmd.cmd_head.entry_num * sizeof(struct readhelper_data));
+		
+  pr_msg("enumerate %d\n",restore_cmd.cmd_head.entry_num);
+	//Enumerate gpu_id
+	for (int i = 0; i < restore_cmd.cmd_head.entry_num; i++) {
+		if (vis[i] != 0)
+			continue;
+
+		for (int j = 0; j < restore_cmd.cmd_head.entry_num; j++) {
+			if (restore_cmd.entries[i].gpu_id == restore_cmd.entries[j].gpu_id) {
+				total_bo_size += restore_cmd.entries[j].size;
+
+				if (restore_cmd.entries[j].size > max_bo_size)
+					max_bo_size = restore_cmd.entries[j].size;
+			}
+		}
+		buffer_size = kfd_max_buffer_size > 0 ? min(kfd_max_buffer_size, max_bo_size) : max_bo_size;
+
+		*ret = init_dev(restore_cmd.entries[i].minor, &h_dev, &max_copy_size);
+		if (*ret < 0) {
+			goto err;
+		}
+
+		bo_contents_fp = get_bo_contents_fp(restore_cmd.cmd_head.id, restore_cmd.entries[i].gpu_id, total_bo_size);
+		if (bo_contents_fp == NULL) {
+			*ret = -1;
+			goto err_sdma;
+		}
+
+		posix_memalign(&buffer, sysconf(_SC_PAGE_SIZE), total_bo_size);
+		if (!buffer) {
+			pr_perror("Failed to alloc aligned memory. Consider setting KFD_MAX_BUFFER_SIZE.");
+			*ret = -ENOMEM;
+			goto err_sdma;
+		}
+
+    for (int j = i; j < restore_cmd.cmd_head.entry_num; j++) {
+				entry = &restore_cmd.entries[j];
+				if (restore_cmd.entries[i].gpu_id == entry->gpu_id) {
+					mydata[j].bo_contents_fp = bo_contents_fp;
+          mydata[j].buffer = buffer;
+          mydata[j].isRead = 0;
+          mydata[j].offset = entry->read_offset;
+          mydata[j].size = entry->size;
+          mydata[j].n = restore_cmd.cmd_head.entry_num;
+				}
+			}
+    pthread_t thread_id;
+    pthread_create(&thread_id, NULL, readhelper, mydata);
+		//Enumerate restore_cmd for the same gpu_id
+		for (int j = i; j < restore_cmd.cmd_head.entry_num; j++) {
+			entry = &restore_cmd.entries[j];
+			if (restore_cmd.entries[i].gpu_id == entry->gpu_id) {
+				vis[j] = 1;
+				//fseek(bo_contents_fp, entry->read_offset, SEEK_SET);
+        while(mydata[j].isRead==0){
+
+        }
+        pthread_mutex_lock(&lock);
+				*ret = sdma_copy_bo_helper(entry->size, restore_cmd.fds_write[entry->write_id],
+							   bo_contents_fp, buffer+entry->read_offset-8, buffer_size, h_dev, max_copy_size, SDMA_OP_VRAM_WRITE);
+        pthread_mutex_unlock(&lock);
+				if (*ret) {
+					pr_err("Failed to fill the BO using sDMA: bo_buckets[%d]\n", i);
+					goto err_sdma;
+				}
+			}
+		}
+    pthread_join(thread_id,NULL);
+err_sdma:
+		if (bo_contents_fp)
+			fclose(bo_contents_fp);
+		if (buffer)
+			xfree(buffer);
+		amdgpu_device_deinitialize(h_dev);
+		if (*ret)
+			goto err;
+	}
+err:
+  pr_msg("Restore over\n");
+	xfree(vis);
+	free_parallel_restore_cmd(&restore_cmd);
+  return NULL;
+}
+
+void *restore_device_parallel(void *arg)
 {
-	while (1) {
-		amdgpu_device_handle h_dev;
-		uint64_t max_copy_size;
-		size_t total_bo_size = 0, max_bo_size = 0, buffer_size = 0;
-		FILE *bo_contents_fp = NULL;
-		parallel_restore_entry *entry;
-		void *buffer = NULL;
-		int *vis = NULL;
-		int *ret = (int *)arg;
-		pr_info("Begin to recv parallel restore cmd\n");
-		*ret = recv_parallel_restore_cmd();
+  struct parallel_thread_data threaddata[10];
+  pthread_t threads[10];
+  int *ret = (int *)arg;
+  int i=0;
+  pthread_mutex_init(&lock, NULL);
+	for(i=0;i<10;i++){
+    pr_msg("Begin to recv parallel restore cmd\n");
+		*ret = recv_parallel_restore_cmd(&threaddata[i].restore_cmd);
 		if (*ret) {
 			if (*ret == 1) {
 				*ret = 0;
+        break;
 			}
 			return NULL;
 		}
-
-		vis = xzalloc(restore_cmd.cmd_head.entry_num * sizeof(int));
-		if (vis == 0) {
-			*ret = -ENOMEM;
-			return NULL;
-		}
-
-		//Enumerate gpu_id
-		for (int i = 0; i < restore_cmd.cmd_head.entry_num; i++) {
-			if (vis[i] != 0)
-				continue;
-
-			for (int j = 0; j < restore_cmd.cmd_head.entry_num; j++) {
-				if (restore_cmd.entries[i].gpu_id == restore_cmd.entries[j].gpu_id) {
-					total_bo_size += restore_cmd.entries[j].size;
-
-					if (restore_cmd.entries[j].size > max_bo_size)
-						max_bo_size = restore_cmd.entries[j].size;
-				}
-			}
-			buffer_size = kfd_max_buffer_size > 0 ? min(kfd_max_buffer_size, max_bo_size) : max_bo_size;
-
-			*ret = init_dev(restore_cmd.entries[i].minor, &h_dev, &max_copy_size);
-			if (*ret < 0) {
-				goto err;
-			}
-
-			bo_contents_fp = get_bo_contents_fp(restore_cmd.cmd_head.id, restore_cmd.entries[i].gpu_id, total_bo_size);
-			if (bo_contents_fp == NULL) {
-				*ret = -1;
-				goto err_sdma;
-			}
-
-			posix_memalign(&buffer, sysconf(_SC_PAGE_SIZE), buffer_size);
-			if (!buffer) {
-				pr_perror("Failed to alloc aligned memory. Consider setting KFD_MAX_BUFFER_SIZE.");
-				*ret = -ENOMEM;
-				goto err_sdma;
-			}
-
-			//Enumerate restore_cmd for the same gpu_id
-			for (int j = i; j < restore_cmd.cmd_head.entry_num; j++) {
-				entry = &restore_cmd.entries[j];
-				if (restore_cmd.entries[i].gpu_id == entry->gpu_id) {
-					vis[j] = 1;
-					fseek(bo_contents_fp, entry->read_offset, SEEK_SET);
-					*ret = sdma_copy_bo_helper(entry->size, restore_cmd.fds_write[entry->write_id],
-								   bo_contents_fp, buffer, buffer_size, h_dev, max_copy_size, SDMA_OP_VRAM_WRITE);
-					if (*ret) {
-						pr_err("Failed to fill the BO using sDMA: bo_buckets[%d]\n", i);
-						goto err_sdma;
-					}
-				}
-			}
-
-err_sdma:
-			if (bo_contents_fp)
-				fclose(bo_contents_fp);
-			if (buffer)
-				xfree(buffer);
-			amdgpu_device_deinitialize(h_dev);
-			if (*ret)
-				goto err;
-		}
-err:
-		xfree(vis);
-		free_parallel_restore_cmd();
-	}
+    pthread_create(&threads[i], NULL, restore_worker, &threaddata[i]);
+  }
+  pr_msg("begin to join");
+  for(int j =0;j<i;j++){
+    pthread_join(threads[j],NULL);
+    if(threaddata[j].ret!=0){
+      *ret = threaddata[j].ret;
+    }
+  }
 	return NULL;
 }
 
@@ -1996,7 +2073,7 @@ int amdgpu_plugin_post_forking(void)
 	pthread_t thread;
 	int thread_result;
 	int ret = 0;
-	if (pthread_create(&thread, NULL, restore_device_parallel_worker, &thread_result) != 0) {
+	if (pthread_create(&thread, NULL, restore_device_parallel, &thread_result) != 0) {
 		pr_perror("Create worker thread fail");
 		return -1;
 	}
