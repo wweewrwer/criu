@@ -241,6 +241,11 @@ int init_pstree_helper(struct pstree_item *ret)
 	return 0;
 }
 
+bool has_no_children(struct pstree_item *item)
+{
+	return list_empty(&item->children);
+}
+
 /* Deep first search on children */
 struct pstree_item *pstree_item_next(struct pstree_item *item)
 {
